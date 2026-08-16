@@ -151,8 +151,24 @@
         state: started
         enabled: true
 
+    # Fail here, with `nginx -t` output in the log, rather than letting a bad
+    # vhost surface as an unexplained 404 in the verify stage.
+    - name: Validate Nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
     - name: Flush handlers
       ansible.builtin.meta: flush_handlers
+
+    # The handler above only fires when a config file actually changed. On a
+    # re-run against an instance whose running Nginx never picked up the vhost,
+    # every file is already correct on disk, no handler fires, and Nginx keeps
+    # serving its stock default site. Reload unconditionally so the running
+    # process always matches what is on disk.
+    - name: Reload Nginx to match on-disk configuration
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
 
     - name: Wait for Nginx on port 80
       ansible.builtin.wait_for:
@@ -160,6 +176,18 @@
         host: 127.0.0.1
         delay: 3
         timeout: 30
+
+    # Proves Nginx is proxying to Vault rather than serving its own 404 page.
+    # Vault is uninitialized on a fresh deploy, so accept every status code that
+    # means "Vault answered" — 404 is not one of them.
+    - name: Verify Nginx proxies through to the Vault API
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/v1/sys/health?uninitcode=204&sealedcode=204&standbycode=204"
+        status_code: [200, 204, 429, 472, 473, 501, 503]
+      register: vault_proxy_health
+      retries: 10
+      delay: 6
+      until: vault_proxy_health is succeeded
 
   handlers:
     - name: Reload systemd
@@ -171,12 +199,13 @@
         name: vault
         state: restarted
 
+    # This used to run `nginx -t` with changed_when: false and chain
+    # `notify: Restart Nginx`. A handler only notifies another handler when it
+    # reports "changed", so changed_when: false made that chain dead code —
+    # Nginx was never reloaded, kept serving its stock default site, and
+    # answered /v1/sys/health with a 404. Validation now lives in a task; this
+    # handler does the reload itself.
     - name: Reload Nginx
-      ansible.builtin.command: nginx -t
-      changed_when: false
-      notify: Restart Nginx
-
-    - name: Restart Nginx
       ansible.builtin.service:
         name: nginx
         state: reloaded

@@ -14,7 +14,9 @@
 
 - The configure stage re-runs `terraform init` + `terraform output` to get the instance IP (self-sufficient job rule — avoids masked-secret job output issues).
 - All three downstream stages (configure, verify) re-init terraform to read the EIP from state.
-- Vault health check hits `/ui/` via HTTP with 15 retries × 20s = up to 5 min boot window.
+- Vault health check hits `/v1/sys/health` (not `/ui/`) with `uninitcode=204&sealedcode=204&standbycode=204`, so an uninitialized/sealed Vault still counts as healthy — verify must not require a manually unsealed Vault.
+- Nginx must be reloaded explicitly every configure run. Handlers only fire on a changed file, so a re-run against an instance whose running Nginx never picked up the vhost would leave it serving the stock default site (404 on every Vault path).
+- The configure stage smoke-tests `http://127.0.0.1/v1/sys/health` on the box itself, so a proxy misconfiguration fails in configure — where the Ansible/Nginx context is — instead of as an opaque 404 in verify.
 
 ## Secrets Required (set via set_pipeline_secret after repo push)
 
