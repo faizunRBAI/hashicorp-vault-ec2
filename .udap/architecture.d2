@@ -1,0 +1,18 @@
+# udap:meta cloud=aws region=us-east-1 target=ec2
+
+vpc: AWS VPC (us-east-1) {
+  ec2: EC2 Instance (t3.small) { shape: rectangle; udap-type: aws.ec2 }
+  sg: Security Group { shape: rectangle; udap-type: aws.ec2 }
+}
+user: Internet / Clients { shape: person; udap-type: generic.user }
+vault: HashiCorp Vault (Docker) { shape: rectangle; udap-type: generic.app }
+nginx: Nginx Reverse Proxy { shape: rectangle; udap-type: generic.app }
+storage: Raft Integrated Storage { shape: cylinder; udap-type: generic.db }
+eip: Elastic IP { shape: rectangle; udap-type: aws.ec2 }
+
+user -> eip: HTTPS :443 / HTTP :80
+eip -> vpc.ec2: routes to
+vpc.sg -> vpc.ec2: allows 22, 80, 443
+vpc.ec2 -> nginx: runs
+nginx -> vault: proxy_pass :8200
+vault -> storage: Raft WAL (local)

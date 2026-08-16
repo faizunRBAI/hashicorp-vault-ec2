@@ -1,0 +1,175 @@
+---
+- name: Configure HashiCorp Vault Server
+  hosts: vault
+  become: true
+  gather_facts: true
+
+  vars:
+    vault_version: "latest"
+    vault_data_dir: /opt/vault/data
+    vault_config_dir: /etc/vault.d
+    vault_log_dir: /var/log/vault
+    vault_port: 8200
+    nginx_conf_dir: /etc/nginx/sites-available
+    nginx_enabled_dir: /etc/nginx/sites-enabled
+
+  pre_tasks:
+    - name: Wait for apt lock to be released
+      ansible.builtin.shell: while fuser /var/lib/dpkg/lock-frontend > /dev/null 2>&1; do sleep 5; done
+      changed_when: false
+      timeout: 120
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+      retries: 3
+      delay: 10
+
+  tasks:
+    # ── Docker ──────────────────────────────────────────────────
+    - name: Install Docker dependencies
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Add Docker GPG key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        update_cache: true
+
+    - name: Install Docker CE
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+
+    - name: Enable and start Docker service
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    # ── Vault Directories ────────────────────────────────────────
+    - name: Create Vault directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - "{{ vault_data_dir }}"
+        - "{{ vault_config_dir }}"
+        - "{{ vault_log_dir }}"
+
+    # ── Vault Config ─────────────────────────────────────────────
+    - name: Deploy Vault configuration
+      ansible.builtin.template:
+        src: vault.hcl.j2
+        dest: "{{ vault_config_dir }}/vault.hcl"
+        owner: root
+        group: root
+        mode: "0640"
+      notify: Restart Vault
+
+    # ── Vault systemd Service ────────────────────────────────────
+    - name: Deploy Vault systemd service
+      ansible.builtin.template:
+        src: vault.service.j2
+        dest: /etc/systemd/system/vault.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart Vault
+
+    - name: Enable and start Vault service
+      ansible.builtin.service:
+        name: vault
+        state: started
+        enabled: true
+
+    - name: Wait for Vault to be listening on port {{ vault_port }}
+      ansible.builtin.wait_for:
+        port: "{{ vault_port }}"
+        host: 127.0.0.1
+        delay: 5
+        timeout: 60
+
+    # ── Nginx ────────────────────────────────────────────────────
+    - name: Install Nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Deploy Nginx Vault vhost
+      ansible.builtin.template:
+        src: vault-nginx.conf.j2
+        dest: "{{ nginx_conf_dir }}/vault"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload Nginx
+
+    - name: Enable Vault vhost
+      ansible.builtin.file:
+        src: "{{ nginx_conf_dir }}/vault"
+        dest: "{{ nginx_enabled_dir }}/vault"
+        state: link
+      notify: Reload Nginx
+
+    - name: Remove default Nginx site
+      ansible.builtin.file:
+        path: "{{ nginx_enabled_dir }}/default"
+        state: absent
+      notify: Reload Nginx
+
+    - name: Enable and start Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Nginx on port 80
+      ansible.builtin.wait_for:
+        port: 80
+        host: 127.0.0.1
+        delay: 3
+        timeout: 30
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart Vault
+      ansible.builtin.service:
+        name: vault
+        state: restarted
+
+    - name: Reload Nginx
+      ansible.builtin.command: nginx -t
+      changed_when: false
+      notify: Restart Nginx
+
+    - name: Restart Nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded

@@ -1,0 +1,17 @@
+ui = true
+
+listener "tcp" {
+  address       = "0.0.0.0:{{ vault_port }}"
+  tls_disable   = 1
+}
+
+storage "raft" {
+  path    = "{{ vault_data_dir }}"
+  node_id = "vault-node-1"
+}
+
+api_addr     = "http://0.0.0.0:{{ vault_port }}"
+cluster_addr = "http://0.0.0.0:8201"
+
+log_level = "info"
+log_file  = "{{ vault_log_dir }}/vault.log"
