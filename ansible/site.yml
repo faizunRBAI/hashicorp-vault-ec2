@@ -8,7 +8,6 @@
     vault_version: "latest"
     vault_data_dir: /opt/vault/data
     vault_config_dir: /etc/vault.d
-    vault_log_dir: /var/log/vault
     vault_port: 8200
     nginx_conf_dir: /etc/nginx/sites-available
     nginx_enabled_dir: /etc/nginx/sites-enabled
@@ -63,22 +62,27 @@
         enabled: true
 
     # ── Vault Directories ────────────────────────────────────────
-    - name: Create Vault directories
+    # vault config dir: owned root, world-readable so UID 100 in container can read vault.hcl
+    - name: Create Vault config directory
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ vault_config_dir }}"
         state: directory
         owner: root
         group: root
         mode: "0755"
-      loop:
-        - "{{ vault_data_dir }}"
-        - "{{ vault_config_dir }}"
-        - "{{ vault_log_dir }}"
+
+    # vault data dir: owned by UID 100 (vault user in Docker image) for Raft write access
+    - name: Create Vault data directory
+      ansible.builtin.file:
+        path: "{{ vault_data_dir }}"
+        state: directory
+        owner: "100"
+        group: "1000"
+        mode: "0750"
 
     # ── Vault Config ─────────────────────────────────────────────
-    # Mode 0644: Vault Docker image runs as UID 100 (vault user);
-    # world-readable is required so the container can read the config
-    # on the bind-mounted volume. The file has no secrets.
+    # mode 0644: world-readable so vault UID 100 inside the container can read it.
+    # No secrets in this file (paths and listener settings only).
     - name: Deploy Vault configuration
       ansible.builtin.template:
         src: vault.hcl.j2

@@ -1,8 +1,8 @@
 ui = true
 
 listener "tcp" {
-  address       = "0.0.0.0:{{ vault_port }}"
-  tls_disable   = 1
+  address     = "0.0.0.0:{{ vault_port }}"
+  tls_disable = 1
 }
 
 storage "raft" {
@@ -13,5 +13,6 @@ storage "raft" {
 api_addr     = "http://0.0.0.0:{{ vault_port }}"
 cluster_addr = "http://0.0.0.0:8201"
 
+# Log to stdout (captured by Docker → journald via systemd service)
+# No log_file directive: avoids host path permission issues with Docker UID 100
 log_level = "info"
-log_file  = "{{ vault_log_dir }}/vault.log"
