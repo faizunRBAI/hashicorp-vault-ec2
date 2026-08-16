@@ -170,24 +170,71 @@
         name: nginx
         state: reloaded
 
-    - name: Wait for Nginx on port 80
-      ansible.builtin.wait_for:
-        port: 80
-        host: 127.0.0.1
-        delay: 3
-        timeout: 30
+    # ── Convergence checks ───────────────────────────────────────
+    - name: Confirm Vault and the Nginx proxy are both healthy
+      block:
+        # The Restart Vault handler tears the container down and back up, so the
+        # earlier wait_for (before flush_handlers) says nothing about the Vault
+        # that is running now. Wait again, on this side of the restart.
+        - name: Wait for Vault to be listening on port {{ vault_port }} after restart
+          ansible.builtin.wait_for:
+            port: "{{ vault_port }}"
+            host: 127.0.0.1
+            delay: 3
+            timeout: 120
 
-    # Proves Nginx is proxying to Vault rather than serving its own 404 page.
-    # Vault is uninitialized on a fresh deploy, so accept every status code that
-    # means "Vault answered" — 404 is not one of them.
-    - name: Verify Nginx proxies through to the Vault API
-      ansible.builtin.uri:
-        url: "http://127.0.0.1/v1/sys/health?uninitcode=204&sealedcode=204&standbycode=204"
-        status_code: [200, 204, 429, 472, 473, 501, 503]
-      register: vault_proxy_health
-      retries: 10
-      delay: 6
-      until: vault_proxy_health is succeeded
+        - name: Wait for Nginx on port 80
+          ansible.builtin.wait_for:
+            port: 80
+            host: 127.0.0.1
+            delay: 3
+            timeout: 30
+
+        # Proves Nginx is proxying to a live Vault rather than serving its own
+        # error page. Vault is uninitialized on a fresh deploy, so accept every
+        # status code that means "Vault answered" — 404 (Nginx serving its
+        # default site) and 502 (Vault down) are deliberately not among them.
+        - name: Verify Nginx proxies through to the Vault API
+          ansible.builtin.uri:
+            url: "http://127.0.0.1/v1/sys/health?uninitcode=204&sealedcode=204&standbycode=204"
+            status_code: [200, 204, 429, 472, 473, 501, 503]
+          register: vault_proxy_health
+          retries: 20
+          delay: 6
+          until: vault_proxy_health is succeeded
+
+      rescue:
+        # Without this the pipeline only ever reports an opaque 404/502 and the
+        # instance is destroyed before anyone can log in and look at it.
+        - name: Collect Vault diagnostics
+          ansible.builtin.shell: |
+            echo "===== systemctl status vault ====="
+            systemctl status vault --no-pager --full 2>&1 || true
+            echo "===== journalctl -u vault (last 200) ====="
+            journalctl -u vault -n 200 --no-pager 2>&1 || true
+            echo "===== docker ps -a ====="
+            docker ps -a 2>&1 || true
+            echo "===== docker logs vault (last 200) ====="
+            docker logs --tail 200 vault 2>&1 || true
+            echo "===== listening sockets ====="
+            ss -tlnp 2>&1 || true
+            echo "===== {{ vault_data_dir }} ====="
+            ls -la {{ vault_data_dir }} 2>&1 || true
+            echo "===== nginx error log (last 50) ====="
+            tail -n 50 /var/log/nginx/error.log 2>&1 || true
+          changed_when: false
+          register: vault_diagnostics
+
+        - name: Show Vault diagnostics
+          ansible.builtin.debug:
+            var: vault_diagnostics.stdout_lines
+
+        - name: Fail after reporting diagnostics
+          ansible.builtin.fail:
+            msg: >-
+              Vault did not come back healthy behind Nginx. The diagnostics dump
+              above has the systemd, container and socket state at time of
+              failure.
 
   handlers:
     - name: Reload systemd

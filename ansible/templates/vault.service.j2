@@ -3,14 +3,28 @@ Description=HashiCorp Vault (Docker)
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
+# Never let systemd stop retrying. A transient Docker error during a restart
+# must not leave Vault permanently down with the unit parked in "failed".
+StartLimitIntervalSec=0
 
 [Service]
+Type=exec
 Restart=always
-RestartSec=10
+RestartSec=5
+
+# Deliberately no --rm on the container below. With --rm, `docker stop` hands
+# removal to the daemon to do asynchronously, so the next ExecStart races it and
+# dies with "container name /vault is already in use" (and the 8200/8201 port
+# bindings are still held by the dying container). Removal is done here instead,
+# synchronously, before every start:
+#   1. stop and force-remove any leftover container (both ignored if absent)
+#   2. block until the name is genuinely free, so ExecStart cannot lose the race
+ExecStartPre=-/usr/bin/docker stop vault
 ExecStartPre=-/usr/bin/docker rm -f vault
+ExecStartPre=/bin/sh -c 'for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do docker inspect vault >/dev/null 2>&1 || exit 0; sleep 1; done; exit 0'
+
 ExecStart=/usr/bin/docker run \
   --name vault \
-  --rm \
   --cap-add=IPC_LOCK \
   -p 127.0.0.1:{{ vault_port }}:{{ vault_port }} \
   -p 127.0.0.1:8201:8201 \
