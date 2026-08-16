@@ -1,5 +1,9 @@
 ui = true
 
+# disable_mlock is required explicitly in Vault 1.20+.
+# Set to true for Docker deployments (containers lack mlock capability by default).
+disable_mlock = true
+
 listener "tcp" {
   address     = "0.0.0.0:{{ vault_port }}"
   tls_disable = 1
@@ -14,5 +18,4 @@ api_addr     = "http://0.0.0.0:{{ vault_port }}"
 cluster_addr = "http://0.0.0.0:8201"
 
 # Log to stdout (captured by Docker → journald via systemd service)
-# No log_file directive: avoids host path permission issues with Docker UID 100
 log_level = "info"
