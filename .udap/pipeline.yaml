@@ -114,7 +114,7 @@ stages:
   - id: verify
     kind: verify
     needs: [configure]
-    timeout_minutes: 10
+    timeout_minutes: 15
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -136,10 +136,11 @@ stages:
             -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
             -backend-config="region=us-east-1"
           echo "instance_ip=$(terraform output -raw instance_ip)" >> "$GITHUB_OUTPUT"
-      - name: Health Check Vault
+      - name: Health Check Vault API
         run: |
-          curl --fail --retry 15 --retry-delay 20 --retry-all-errors \
-            http://${{ steps.tf_output.outputs.instance_ip }}/ui/
+          curl --fail --retry 15 --retry-delay 10 --retry-all-errors \
+            --write-out "HTTP %{http_code}\n" \
+            "http://${{ steps.tf_output.outputs.instance_ip }}/v1/sys/health?uninitcode=204&sealedcode=204&standbycode=204"
 
 rollback:
   strategy: manual

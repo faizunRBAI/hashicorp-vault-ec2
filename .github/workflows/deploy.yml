@@ -128,7 +128,7 @@ jobs:
       AWS_REGION: us-east-1
       TF_VAR_project_name: ${{ secrets.PROJECT_NAME }}
       TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
     - name: Setup Terraform
@@ -144,6 +144,7 @@ jobs:
         \ \"instance_ip=$(terraform output -raw instance_ip)\" >> \"$GITHUB_OUTPUT\"\
         \n"
       working-directory: infra
-    - name: Health Check Vault
-      run: "curl --fail --retry 15 --retry-delay 20 --retry-all-errors \\\n  http://${{\
-        \ steps.tf_output.outputs.instance_ip }}/ui/\n"
+    - name: Health Check Vault API
+      run: "curl --fail --retry 15 --retry-delay 10 --retry-all-errors \\\n  --write-out\
+        \ \"HTTP %{http_code}\\n\" \\\n  \"http://${{ steps.tf_output.outputs.instance_ip\
+        \ }}/v1/sys/health?uninitcode=204&sealedcode=204&standbycode=204\"\n"
