@@ -1,0 +1,30 @@
+---
+# Shared failure dump, included from the rescue of every Vault convergence check.
+#
+# Eight deploys failed with nothing in the log but a bare status code, and the
+# pipeline destroys the instance before anyone can SSH in and look. A run that
+# fails should carry the evidence with it.
+- name: Collect Vault diagnostics
+  ansible.builtin.shell: |
+    echo "===== systemctl status vault ====="
+    systemctl status vault --no-pager --full 2>&1 || true
+    echo "===== journalctl -u vault (last 100) ====="
+    journalctl -u vault -n 100 --no-pager 2>&1 || true
+    echo "===== docker ps -a ====="
+    docker ps -a 2>&1 || true
+    echo "===== docker logs vault (last 100) ====="
+    docker logs --tail 100 vault 2>&1 || true
+    echo "===== listening sockets ====="
+    ss -tlnp 2>&1 || true
+    echo "===== {{ vault_data_dir }} (host) ====="
+    ls -la {{ vault_data_dir }} 2>&1 || true
+    echo "===== rendered {{ vault_config_dir }}/vault.hcl ====="
+    cat {{ vault_config_dir }}/vault.hcl 2>&1 || true
+    echo "===== nginx error log (last 50) ====="
+    tail -n 50 /var/log/nginx/error.log 2>&1 || true
+  changed_when: false
+  register: vault_diagnostics
+
+- name: Show Vault diagnostics
+  ansible.builtin.debug:
+    var: vault_diagnostics.stdout_lines

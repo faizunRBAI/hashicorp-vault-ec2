@@ -6,8 +6,18 @@
 
   vars:
     vault_version: "latest"
+
+    # Host paths — bind-mount sources, and the only paths Ansible itself touches.
     vault_data_dir: /opt/vault/data
     vault_config_dir: /etc/vault.d
+
+    # Container paths — bind-mount targets. Anything Vault reads out of its own
+    # config must use these, never the host paths above. Mixing the two is what
+    # made Vault crash-loop on "failed to open bolt file: no such file or
+    # directory" while the published port still looked healthy.
+    vault_container_data_dir: /vault/data
+    vault_container_config_dir: /vault/config
+
     vault_port: 8200
     nginx_conf_dir: /etc/nginx/sites-available
     nginx_enabled_dir: /etc/nginx/sites-enabled
@@ -110,12 +120,29 @@
         state: started
         enabled: true
 
-    - name: Wait for Vault to be listening on port {{ vault_port }}
-      ansible.builtin.wait_for:
-        port: "{{ vault_port }}"
-        host: 127.0.0.1
-        delay: 5
-        timeout: 60
+    # NOT a port check. Docker publishes the port by starting docker-proxy as
+    # soon as the container is created, so 127.0.0.1:8200 accepts connections
+    # even while Vault is crash-looping inside the container — which is exactly
+    # how a broken storage path stayed invisible for eight deploys. Ask Vault
+    # itself, and treat only a real API response as proof it is up.
+    - name: Wait for Vault to answer on port {{ vault_port }}
+      block:
+        - name: Query Vault health directly
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ vault_port }}/v1/sys/health?uninitcode=204&sealedcode=204&standbycode=204"
+            status_code: [200, 204, 429, 472, 473, 501, 503]
+          register: vault_direct_health
+          retries: 20
+          delay: 5
+          until: vault_direct_health is succeeded
+      rescue:
+        - name: Report Vault diagnostics
+          ansible.builtin.include_tasks: tasks/vault-diagnostics.yml
+        - name: Fail after reporting diagnostics
+          ansible.builtin.fail:
+            msg: >-
+              Vault never answered on 127.0.0.1:{{ vault_port }}. The diagnostics
+              dump above has the container and systemd state at time of failure.
 
     # ── Nginx ────────────────────────────────────────────────────
     - name: Install Nginx
@@ -174,14 +201,16 @@
     - name: Confirm Vault and the Nginx proxy are both healthy
       block:
         # The Restart Vault handler tears the container down and back up, so the
-        # earlier wait_for (before flush_handlers) says nothing about the Vault
-        # that is running now. Wait again, on this side of the restart.
-        - name: Wait for Vault to be listening on port {{ vault_port }} after restart
-          ansible.builtin.wait_for:
-            port: "{{ vault_port }}"
-            host: 127.0.0.1
-            delay: 3
-            timeout: 120
+        # earlier check says nothing about the Vault that is running now. Ask
+        # again, on this side of the restart.
+        - name: Verify Vault answers directly after restart
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ vault_port }}/v1/sys/health?uninitcode=204&sealedcode=204&standbycode=204"
+            status_code: [200, 204, 429, 472, 473, 501, 503]
+          register: vault_direct_health_post
+          retries: 20
+          delay: 6
+          until: vault_direct_health_post is succeeded
 
         - name: Wait for Nginx on port 80
           ansible.builtin.wait_for:
@@ -204,30 +233,8 @@
           until: vault_proxy_health is succeeded
 
       rescue:
-        # Without this the pipeline only ever reports an opaque 404/502 and the
-        # instance is destroyed before anyone can log in and look at it.
-        - name: Collect Vault diagnostics
-          ansible.builtin.shell: |
-            echo "===== systemctl status vault ====="
-            systemctl status vault --no-pager --full 2>&1 || true
-            echo "===== journalctl -u vault (last 200) ====="
-            journalctl -u vault -n 200 --no-pager 2>&1 || true
-            echo "===== docker ps -a ====="
-            docker ps -a 2>&1 || true
-            echo "===== docker logs vault (last 200) ====="
-            docker logs --tail 200 vault 2>&1 || true
-            echo "===== listening sockets ====="
-            ss -tlnp 2>&1 || true
-            echo "===== {{ vault_data_dir }} ====="
-            ls -la {{ vault_data_dir }} 2>&1 || true
-            echo "===== nginx error log (last 50) ====="
-            tail -n 50 /var/log/nginx/error.log 2>&1 || true
-          changed_when: false
-          register: vault_diagnostics
-
-        - name: Show Vault diagnostics
-          ansible.builtin.debug:
-            var: vault_diagnostics.stdout_lines
+        - name: Report Vault diagnostics
+          ansible.builtin.include_tasks: tasks/vault-diagnostics.yml
 
         - name: Fail after reporting diagnostics
           ansible.builtin.fail:

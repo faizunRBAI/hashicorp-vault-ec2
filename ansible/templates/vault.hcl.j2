@@ -9,13 +9,21 @@ listener "tcp" {
   tls_disable = 1
 }
 
+# Every path in this file is resolved INSIDE the container. The host directory
+# {{ vault_data_dir }} is bind-mounted at {{ vault_container_data_dir }}, and it is the
+# container path that raft must be given. Handing raft the host path makes Vault
+# exit at startup with:
+#   failed to open bolt file: open {{ vault_data_dir }}/vault.db: no such file or directory
 storage "raft" {
-  path    = "{{ vault_data_dir }}"
+  path    = "{{ vault_container_data_dir }}"
   node_id = "vault-node-1"
 }
 
-api_addr     = "http://0.0.0.0:{{ vault_port }}"
-cluster_addr = "http://0.0.0.0:8201"
+# Advertise addresses — where Vault says it can be reached, which is not the
+# same thing as the bind address above. 0.0.0.0 is a valid thing to listen on
+# but not a valid thing to dial, so it does not belong here.
+api_addr     = "http://127.0.0.1:{{ vault_port }}"
+cluster_addr = "http://127.0.0.1:8201"
 
 # Log to stdout (captured by Docker → journald via systemd service)
 log_level = "info"

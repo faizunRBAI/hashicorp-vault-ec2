@@ -28,11 +28,11 @@ ExecStart=/usr/bin/docker run \
   --cap-add=IPC_LOCK \
   -p 127.0.0.1:{{ vault_port }}:{{ vault_port }} \
   -p 127.0.0.1:8201:8201 \
-  -v {{ vault_config_dir }}/vault.hcl:/vault/config/vault.hcl:ro \
-  -v {{ vault_data_dir }}:/vault/data \
+  -v {{ vault_config_dir }}/vault.hcl:{{ vault_container_config_dir }}/vault.hcl:ro \
+  -v {{ vault_data_dir }}:{{ vault_container_data_dir }} \
   -e VAULT_LOG_LEVEL=info \
   hashicorp/vault:latest \
-  vault server -config=/vault/config/vault.hcl
+  vault server -config={{ vault_container_config_dir }}/vault.hcl
 ExecStop=/usr/bin/docker stop vault
 StandardOutput=journal
 StandardError=journal
