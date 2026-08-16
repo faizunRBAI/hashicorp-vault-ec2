@@ -69,20 +69,23 @@
         state: directory
         owner: root
         group: root
-        mode: "0750"
+        mode: "0755"
       loop:
         - "{{ vault_data_dir }}"
         - "{{ vault_config_dir }}"
         - "{{ vault_log_dir }}"
 
     # ── Vault Config ─────────────────────────────────────────────
+    # Mode 0644: Vault Docker image runs as UID 100 (vault user);
+    # world-readable is required so the container can read the config
+    # on the bind-mounted volume. The file has no secrets.
     - name: Deploy Vault configuration
       ansible.builtin.template:
         src: vault.hcl.j2
         dest: "{{ vault_config_dir }}/vault.hcl"
         owner: root
         group: root
-        mode: "0640"
+        mode: "0644"
       notify: Restart Vault
 
     # ── Vault systemd Service ────────────────────────────────────
